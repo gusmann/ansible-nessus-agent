@@ -20,6 +20,7 @@ all:
 nessus1:
   vars:
     agent_group: "tenablegroup1"
+    nessus_key: "key1"
   hosts:
     host11:
     # ...
@@ -27,6 +28,7 @@ nessus1:
 nessus2:
   vars:
     agent_group: "tenablegroup2"
+    nessus_key: "key2"
   hosts:
     host21:
     # ...
