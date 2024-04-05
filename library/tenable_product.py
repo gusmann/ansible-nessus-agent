@@ -87,6 +87,9 @@ def is_equivalent_distro(distro1, major_version, distro2):
   return False
 
 class TenableInfoMetadata:
+    """a dataclass-like container for TenableInfoMetadata
+    (python before 3.7 didn't include dataclasses module :()
+    """
     def __init__(self, 
                  os:str="",
                  md5:str="",
@@ -113,6 +116,9 @@ class TenableInfoMetadata:
 
 
 class TenableDownloadInfo:
+    """a dataclass-like container for TenableDownloadInfo
+    (python before 3.7 didn't include dataclasses module :()
+    """
     def __init__(self,
                  id: int = None,
                  file: str = "",
@@ -177,6 +183,9 @@ class TenableDownloadInfo:
 
 
 class TenableProductInfo:
+    """a dataclass-like container for TenableProductInfo
+    (python before 3.7 didn't include dataclasses module :()
+    """
     def __init__(self,
                  product_name: str,
                  sort_order: str ,
@@ -203,6 +212,8 @@ class TenableProductInfo:
         return [(d.meta_data.os, d.meta_data.arch) for d in self.downloads]
 
 class TenablePageParser(html.parser.HTMLParser):
+    """An HTML parser using python's standard lib, looks for the JSON in tenable's page w/ the content we're after
+    """
     def __init__(self, tag: str = "script", attrs: Optional[Tuple[str]] = None):
         super().__init__()
         if not attrs:
@@ -240,6 +251,12 @@ class TenablePageParser(html.parser.HTMLParser):
         return product_info
 
 class TenableProductDownloader:
+    """A wrapper around requests lib to get and parse Tenable's product page
+
+    Raises:
+        ValueError: raised when an unexpected status code is received from Tenable's product page or download API
+
+    """
     root_product_uri = "https://www.tenable.com/downloads"
     available_products = ["nessus-agents", "security-center"]
     
@@ -255,6 +272,7 @@ class TenableProductDownloader:
                 self.product_info[product_name] = parser.get_product_info(product_page_response.text)
             else:
                 logger.error(f"Unable to retrieve product info for {product_name}: {product_page_response.status_code} HTTP response")
+                raise ValueError(f"Received unexpected server response (HTTP code {product_page_response.status_code}): {product_page_response.text}")
 
     @property
     def nessus_agent_info(self)-> Dict[str, TenableProductInfo]:
