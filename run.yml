@@ -1,0 +1,66 @@
+- name: run module
+  hosts: nessus
+  become: yes
+  vars:
+    force_install: False # TODO: should be possible to force install (i.e. uninstall & reinstall/re-enroll host)
+  tasks:
+    - name: Gather package facts
+      ansible.builtin.package_facts:
+        manager: auto
+    - name: if nessus agent isn't installed, install it
+      when: "'nessusagent' not in ansible_facts.packages or force_install"
+      block:
+        # - name: ensure a local temp dir exists for package
+        # not necessary since package managers can download from a url directly
+        #   ansible.builtin.tempfile:
+        #     state: directory
+        #     suffix: tenable
+        #   register: tempdir_ref
+        - name: download/lookup latest nessus agent for target system
+          tenable_product:
+            state: lookup_only
+            # destination_path: '{{tempdir_ref.path}}'
+          register: tenable_product_out
+        - name: dump output
+          debug:
+            msg: '{{ tenable_product_out }}'
+        - name: install nessus agent using yum (if yum is the system's package manager)
+          ansible.builtin.yum:
+            name: '{{ tenable_product_out.package_uri }}'
+            state: present
+          when:
+            - tenable_product_out.system_info.pkg_mgr == 'yum'
+        - name: install nessus agent using apt (if apt is the system's package manager)
+          ansible.builtin.apt:
+            deb: '{{ tenable_product_out.package_uri }}'
+            state: present
+          when: 
+            - tenable_product_out.system_info.pkg_mgr == 'apt'
+        - name: install nessus agent using dnf (if dnf is the system's package manager)
+          ansible.builtin.dnf:
+            name: '{{ tenable_product_out.package_uri }}'
+            state: present
+          when: 
+            - tenable_product_out.system_info.pkg_mgr == 'dnf'
+    - name: Check agent link status
+      shell: /opt/nessus_agent/sbin/nessuscli agent status; true
+      register: nessus_link_status
+    - name: Configure agent if not linked
+      when: "'Linked to: {{ agent_host }}' not in nessus_link_status.stdout"
+      block:
+        - name: ensure agent is stopped
+          ansible.builtin.systemd_service: 
+            name: nessusagent
+            state: stopped
+        - name: configure agent
+          ansible.builtin.command: |
+            /opt/nessus_agent/sbin/nessuscli agent link --host={{ agent_host }} --port={{ agent_port }} --key={{ nessus_key }} --groups={{ agent_group }} 
+          register: configuration_out
+        - name: dump configuration output
+          debug:
+            msg: '{{ configuration_out }}'
+        - name: Enable agent service
+          ansible.builtin.systemd_service:
+            enabled: true
+            name: nessusagent
+            state: started

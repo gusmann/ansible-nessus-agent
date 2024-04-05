@@ -1,0 +1,3 @@
+.venv
+ansible.log
+inventory/group_vars/nessus.yml

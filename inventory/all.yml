@@ -1,0 +1,10 @@
+nessus:
+  vars:
+    agent_group: "yourgrouphere" # or somewhere else?
+    agent_host: cloud.tenable.com 
+    agent_port: 443
+  hosts:
+    # alpha:
+    beta:
+    gamma:
+    delta:
