@@ -1,5 +1,5 @@
 - name: run module
-  hosts: nessus
+  hosts: all
   become: yes
   vars:
     force_install: False # TODO: should be possible to force install (i.e. uninstall & reinstall/re-enroll host)
@@ -10,16 +10,9 @@
     - name: if nessus agent isn't installed, install it
       when: "'nessusagent' not in ansible_facts.packages or force_install"
       block:
-        # - name: ensure a local temp dir exists for package
-        # not necessary since package managers can download from a url directly
-        #   ansible.builtin.tempfile:
-        #     state: directory
-        #     suffix: tenable
-        #   register: tempdir_ref
         - name: download/lookup latest nessus agent for target system
           tenable_product:
             state: lookup_only
-            # destination_path: '{{tempdir_ref.path}}'
           register: tenable_product_out
         - name: dump output
           debug:
