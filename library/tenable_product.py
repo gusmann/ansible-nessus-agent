@@ -6,11 +6,12 @@ import json
 import re
 import html.parser
 import logging
+import hashlib
 
 
 import requests
 
-TENABLE_DOWNLOAD_API_URI = "https://www.tenable.com/downloads/api/v1/public/pages/nessus-agents/downloads/{product_id}/download?i_agree_to_tenable_license_agreement=true"
+TENABLE_DOWNLOAD_API_URI = "https://www.tenable.com/downloads/api/v1/public/pages/{product_line}/downloads/{product_id}/download?i_agree_to_tenable_license_agreement=true"
 logger = logging.getLogger(__name__)
 
 def to_dict(obj):
@@ -116,10 +117,11 @@ class TenableInfoMetadata:
 
 
 class TenableDownloadInfo:
-    """a dataclass-like container for TenableDownloadInfo
+    """a dataclass-like container for TenableDownloadInfo. 
     (python before 3.7 didn't include dataclasses module :()
     """
     def __init__(self,
+                 product_line: str,
                  id: int = None,
                  file: str = "",
                  name: str = "",
@@ -134,6 +136,7 @@ class TenableDownloadInfo:
                  disabled: bool = None,
                  type: str = "",
                  meta_data: Optional[TenableInfoMetadata] = None) -> None:
+        self.product_line = product_line
         if meta_data is None:
             meta_data = {}
         self.id = id
@@ -150,7 +153,7 @@ class TenableDownloadInfo:
         self.disabled = disabled
         self.type = type
         self.meta_data = meta_data
-        self.download_uri = TENABLE_DOWNLOAD_API_URI.format(product_id = self.id)
+        self.download_uri = TENABLE_DOWNLOAD_API_URI.format(product_line=product_line, product_id = self.id)
         self.meta_data = TenableInfoMetadata(**self.meta_data)
         if self.name.endswith('dmg'):
             self.meta_data.os_type = "darwin"
@@ -187,6 +190,7 @@ class TenableProductInfo:
     (python before 3.7 didn't include dataclasses module :()
     """
     def __init__(self,
+                 product_line: str,
                  product_name: str,
                  sort_order: str ,
                  downloads: List[TenableDownloadInfo],
@@ -197,7 +201,7 @@ class TenableProductInfo:
         self.downloads = downloads
         self.release_notes = release_notes
         self.version = version
-        self.downloads = [TenableDownloadInfo(**d) for d in downloads]
+        self.downloads = [TenableDownloadInfo(product_line=product_line, **d) for d in downloads]
 
     def get_download_for(self, os: str, major_version:str, arch:str, os_type:str)->TenableDownloadInfo:
         """Retrieves the first download w/ matching OS/Arch info. Note, the ordering is arbitrary and may cause unintended results.
@@ -240,14 +244,23 @@ class TenablePageParser(html.parser.HTMLParser):
             except json.JSONDecodeError as e:
                 return None  # Handle invalid JSON gracefully
 
-    def get_product_info(self, text:str) -> Dict[str, TenableProductInfo]:
+    def get_product_info(self, product_line: str, text:str) -> Dict[str, TenableProductInfo]:
+        """A product line is what 
+
+        Args:
+            product_line (str): _description_
+            text (str): _description_
+
+        Returns:
+            Dict[str, TenableProductInfo]: _description_
+        """
         if self.decoded_json is None:
             self.feed(text)
         products = self.decoded_json['props']['pageProps']['products']
         product_info = {}
         for product_name in products:
             product_info_dict = products[product_name]
-            product_info[product_name] = TenableProductInfo(**product_info_dict)
+            product_info[product_name] = TenableProductInfo(product_line=product_line, **product_info_dict)
         return product_info
 
 class TenableProductDownloader:
@@ -258,20 +271,20 @@ class TenableProductDownloader:
 
     """
     root_product_uri = "https://www.tenable.com/downloads"
-    available_products = ["nessus-agents", "security-center"]
+    tenable_product_lines = ["nessus-agents", "security-center"]
     
     def __init__(self) -> None:
         self.session = requests.Session()
         self.product_info: Dict[str, Dict[str, TenableProductInfo]] = {}
     
     def load_all_product_info(self) -> None:
-        for product_name in self.available_products:
+        for product_line in self.tenable_product_lines:
             parser = TenablePageParser()
-            product_page_response = self.session.get(f"{self.root_product_uri}/{product_name}?loginAttempted=true")
+            product_page_response = self.session.get(f"{self.root_product_uri}/{product_line}?loginAttempted=true")
             if product_page_response.status_code == 200:
-                self.product_info[product_name] = parser.get_product_info(product_page_response.text)
+                self.product_info[product_line] = parser.get_product_info(product_line=product_line, text=product_page_response.text)
             else:
-                logger.error(f"Unable to retrieve product info for {product_name}: {product_page_response.status_code} HTTP response")
+                logger.error(f"Unable to retrieve product info for {product_line}: {product_page_response.status_code} HTTP response")
                 raise ValueError(f"Received unexpected server response (HTTP code {product_page_response.status_code}): {product_page_response.text}")
 
     @property
@@ -289,14 +302,16 @@ class TenableProductDownloader:
     def get_nessus_agent_download_info(self, os:str, major_version:str, arch:str,os_type:str) -> TenableDownloadInfo:
         return self.nessus_agent_installer_info.get_download_for(os,major_version,arch,os_type)
 
-    def download_to_path(self, info: TenableDownloadInfo, download_path: Path):
-        download_path.mkdir(parents=True, exist_ok=True)
+    def download_to_directory(self, info: TenableDownloadInfo, download_directory: Path) -> Tuple[Path, str, str]:
+        download_directory.mkdir(parents=True, exist_ok=True)
         response = self.session.get(info.download_uri)
         if response.status_code == 200:
-            destination_path = download_path / info.name
+            destination_path = download_directory / info.name
             with destination_path.open('wb') as f:
                 f.write(response.content)
-            return destination_path
+            download_sha256 = hashlib.sha256(response.content).hexdigest()
+            expected_sha256 = info.meta_data.sha256
+            return destination_path, download_sha256, expected_sha256
         else: 
             raise ValueError(f"Received unexpected server response (HTTP code {response.status_code}): {response.text}")
 
@@ -321,9 +336,13 @@ options:
         required: false
         type: string
     download_directory:
-        description: An optional directory to use to download a Tenable product's package.
+        description: A directory to use to download a Tenable product's package. Required to perform a checksum of package to verify integrity.
         required: false
         type: str
+    perform_checksum:
+        description: Whether verify integrity of package using Tenable's provided sha256 hashes. If set, requires download_directory to be set.
+        required: false
+        type: bool
 author:
     - Gustavo Argote (@)
 '''
@@ -385,7 +404,7 @@ package_uri:
     returned: always
     sample: https://www.tenable.com/downloads/api/v1/public/pages/nessus-agents/downloads/22712/download?i_agree_to_tenable_license_agreement=true
 system_info:
-    description: 
+    description: details gathered about the host machine using built-in platform and distribution fact modules
     type: dict
     returned: always
     sample: {"architecture": "x86_64",
@@ -410,6 +429,10 @@ system_info:
             "system": "Linux",
             "userspace_architecture": "x86_64",
             "userspace_bits": "64"}
+package_computed_sha256:
+    description: if package is downloaded, this will contain the computed sha256 hash of the package
+    type: str
+    sample: 0ea2f72a7d3a9e7dfcd59712388136fd15f61c310effb22d5b8d8de44314b141
 '''
 
 from ansible.module_utils.basic import AnsibleModule
@@ -423,6 +446,7 @@ def run_module():
         download_directory=dict(type='str', required=False),
         state=dict(type='str', required=False), # download, lookup_only
         cleanup=dict(type='bool', required=False),
+        perform_checksum=dict(type='bool', required=False)
     )
     
     # seed the result dict in the object
@@ -434,7 +458,8 @@ def run_module():
         changed=False,
         product_info='',
         package_uri='',
-        system_info=''
+        system_info='',
+        package_computed_sha256='',
     )
     
     # # the AnsibleModule object will be our abstraction working with Ansible
@@ -446,6 +471,9 @@ def run_module():
         supports_check_mode=True,
         add_file_common_args=True
     )
+    # verify parameters make sense
+    if module.params['perform_checksum'] and not module.params['download_directory']:
+        module.fail_json(msg='`perform_checksum` set without a provided `download_directory` folder; unable to verify integrity without downloading to a directory on host.', **result)
     
     distro_facts = DistributionFactCollector().collect(module=module)
     platform_facts = PlatformFactCollector().collect(module=module)
@@ -467,15 +495,17 @@ def run_module():
     
     if module.params['download_directory']:
         dpath = Path(module.params['download_directory'])
-        destination_path = downloader.download_to_path(info, download_path=dpath)
-        result['package_uri'] = str(destination_path)
+        destination_path, computed_sha256, expected_sha256 = downloader.download_to_directory(info, download_directory=dpath)
         result['changed'] = True
+        result['package_computed_sha256'] = computed_sha256
+        if module.params['perform_checksum'] and (computed_sha256 != expected_sha256):
+            module.fail_json(msg=f"Package downloaded to '{destination_path}' but did not match Tenable's provided sha256 hash '{expected_sha256}': '{computed_sha256}' ", **result)
+        result['package_uri'] = str(destination_path)
     # during the execution of the module, if there is an exception or a
     # conditional state that effectively causes a failure, run
     # AnsibleModule.fail_json() to pass in the message and the result
     # if module.params['name'] == 'fail me':
     #     module.fail_json(msg='You requested this to fail', **result)
-
     # in the event of a successful module execution, you will want to
     # simple AnsibleModule.exit_json(), passing the key/value results
     module.exit_json(**result)

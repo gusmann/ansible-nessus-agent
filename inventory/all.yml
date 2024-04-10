@@ -6,5 +6,5 @@ nessus:
   hosts:
     # alpha:
     beta:
-    gamma:
-    delta:
+    # gamma:
+    # delta:

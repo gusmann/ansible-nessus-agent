@@ -2,7 +2,7 @@
   hosts: all
   become: yes
   vars:
-    force_install: False # TODO: should be possible to force install (i.e. uninstall & reinstall/re-enroll host)
+    force_install: True # TODO: should be possible to force install (i.e. uninstall & reinstall/re-enroll host)
   tasks:
     - name: Gather package facts
       ansible.builtin.package_facts:
@@ -10,9 +10,16 @@
     - name: if nessus agent isn't installed, install it
       when: "'nessusagent' not in ansible_facts.packages or force_install"
       block:
+        - name: ensure a local temp dir exists for package
+          ansible.builtin.tempfile:
+            state: directory
+            suffix: tenable
+          register: tempdir_ref
         - name: download/lookup latest nessus agent for target system
           tenable_product:
-            state: lookup_only
+            # state: lookup_only
+            download_directory: "{{ tempdir_ref.path }}"
+            perform_checksum: True
           register: tenable_product_out
         - name: dump output
           debug:
@@ -23,18 +30,21 @@
             state: present
           when:
             - tenable_product_out.system_info.pkg_mgr == 'yum'
+            - tenable_product_out.changed
         - name: install nessus agent using apt (if apt is the system's package manager)
           ansible.builtin.apt:
             deb: '{{ tenable_product_out.package_uri }}'
             state: present
           when: 
             - tenable_product_out.system_info.pkg_mgr == 'apt'
+            - tenable_product_out.changed
         - name: install nessus agent using dnf (if dnf is the system's package manager)
           ansible.builtin.dnf:
             name: '{{ tenable_product_out.package_uri }}'
             state: present
           when: 
             - tenable_product_out.system_info.pkg_mgr == 'dnf'
+            - tenable_product_out.changed
     - name: Check agent link status
       shell: /opt/nessus_agent/sbin/nessuscli agent status; true
       register: nessus_link_status

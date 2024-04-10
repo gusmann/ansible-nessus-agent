@@ -1,0 +1,22 @@
+- name: Download package and compare checksums then delete temporary folder w/ package
+  hosts: all
+  become: yes
+  tasks:
+    - name: ensure a local temp dir exists for package
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: _tenable
+      register: tempdir_ref
+    - name: download/lookup latest nessus agent for target system
+      tenable_product:
+        download_directory: "{{ tempdir_ref.path }}"
+        perform_checksum: True
+      register: tenable_product_out
+    - name: dump output
+      debug:
+        msg: '{{ tenable_product_out }}'
+    - name: delete temp dir & contents
+      ansible.builtin.file:
+        state: absent
+        path: "{{ tempdir_ref.path }}"
+
